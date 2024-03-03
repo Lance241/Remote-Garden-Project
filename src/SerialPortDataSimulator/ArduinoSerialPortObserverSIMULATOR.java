@@ -5,22 +5,28 @@ import java.util.Scanner;
 
 public class ArduinoSerialPortObserverSIMULATOR {
 
+	enum Condition {
+		WET, NORMAL, DRY
+	}
+
 	public static void main(String[] args) {
 		Scanner scanner = new Scanner(System.in);
 		System.out.println("Which condition would you like to simulate? (wet, normal, dry)");
-		String condition = scanner.nextLine().trim().toLowerCase();
+		String input = scanner.nextLine().trim().toUpperCase();
 
-		String filePath = determineFilePath(condition);
-
-		if (filePath == null) {
+		Condition condition;
+		try {
+			condition = Condition.valueOf(input);
+		} catch (IllegalArgumentException e) {
 			System.out.println("Invalid condition entered. Please run the program again with one of the specified conditions: wet, normal, dry.");
 			return;
 		}
 
+		String filePath = determineFilePath(condition);
 		simulateDataOutput(filePath);
 	}
 
-	private static String determineFilePath(String condition) {
+	private static String determineFilePath(Condition condition) {
 		switch (condition) {
 			case "wet":
 				return "src/SerialPortDataSimulator/WetConditions";
@@ -29,7 +35,7 @@ public class ArduinoSerialPortObserverSIMULATOR {
 			case "dry":
 				return "src/SerialPortDataSimulator/DryConditions";
 			default:
-				return null;
+				return null; // This should never happen
 		}
 	}
 
@@ -42,6 +48,7 @@ public class ArduinoSerialPortObserverSIMULATOR {
 					Thread.sleep(60000); // Pause for one minute
 				} catch (InterruptedException e) {
 					System.out.println("Simulation interrupted.");
+					Thread.currentThread().interrupt(); // Restore the interrupted status
 					break;
 				}
 			}
