@@ -30,11 +30,11 @@ public class ArduinoSerialPortObserverSIMULATOR {
 
 	private static String determineFilePath(Condition condition) {
 		switch (condition) {
-			case "wet":
+			case WET:
 				return "src/SerialPortDataSimulator/WetConditions";
-			case "normal":
+			case NORMAL:
 				return "src/SerialPortDataSimulator/NormalConditions";
-			case "dry":
+			case DRY:
 				return "src/SerialPortDataSimulator/DryConditions";
 			default:
 				return null; // This should never happen
