@@ -1,14 +1,52 @@
 package SerialPortDataSimulator;
 
-import java.io.BufferedReader;
-import java.io.FileReader;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.List;
 import java.util.Scanner;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class ArduinoSerialPortObserverSIMULATOR {
 
 	enum Condition {
-		WET, NORMAL, DRY
+		WET("src/SerialPortDataSimulator/WetConditions"),
+		NORMAL("src/SerialPortDataSimulator/NormalConditions"),
+		DRY("src/SerialPortDataSimulator/DryConditions");
+
+		private final String filePath;
+
+		Condition(String filePath) {
+			this.filePath = filePath;
+		}
+
+		public String getFilePath() {
+			return filePath;
+		}
+	}
+
+	private static void simulateDataOutput(String filePath) {
+		try {
+			List<String> lines = Files.readAllLines(Paths.get(filePath));
+			ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+			final int[] counter = {0}; // Use an array to allow modification inside lambda
+
+			Runnable command = () -> {
+				if (counter[0] < lines.size()) {
+					System.out.println(lines.get(counter[0]++));
+				} else {
+					executor.shutdown(); // Shut down the executor once all lines are printed
+				}
+			};
+
+			// Schedule the command to run once every second
+			executor.scheduleAtFixedRate(command, 0, 1, TimeUnit.SECONDS);
+
+		} catch (IOException e) {
+			System.out.println("Error reading file: " + e.getMessage());
+		}
 	}
 
 	public static void main(String[] args) {
@@ -24,38 +62,6 @@ public class ArduinoSerialPortObserverSIMULATOR {
 			return;
 		}
 
-		String filePath = determineFilePath(condition);
-		simulateDataOutput(filePath);
-	}
-
-	private static String determineFilePath(Condition condition) {
-		switch (condition) {
-			case WET:
-				return "src/SerialPortDataSimulator/WetConditions";
-			case NORMAL:
-				return "src/SerialPortDataSimulator/NormalConditions";
-			case DRY:
-				return "src/SerialPortDataSimulator/DryConditions";
-			default:
-				return null; // This should never happen
-		}
-	}
-
-	private static void simulateDataOutput(String filePath) {
-		try (BufferedReader br = new BufferedReader(new FileReader(filePath))) {
-			String line;
-			while ((line = br.readLine()) != null) {
-				System.out.println(line);
-				try {
-					Thread.sleep(60000); // Pause for one minute
-				} catch (InterruptedException e) {
-					System.out.println("Simulation interrupted.");
-					Thread.currentThread().interrupt(); // Restore the interrupted status
-					break;
-				}
-			}
-		} catch (IOException e) {
-			System.out.println("Error reading file: " + e.getMessage());
-		}
+		simulateDataOutput(condition.getFilePath());
 	}
 }
