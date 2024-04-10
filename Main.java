@@ -1,15 +1,35 @@
+import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
+import javafx.scene.chart.BarChart;
+import javafx.scene.chart.CategoryAxis;
+import javafx.scene.chart.NumberAxis;
+import javafx.scene.chart.XYChart;
 import javafx.scene.control.*;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
 public class Main extends Application {
+    private ArduinoConnector arduinoConnector;
+    private List<VBox> plantDetailsList = new ArrayList<>();
 
     @Override
     public void start(Stage primaryStage) {
+        // Instantiate ArduinoConnector with the appropriate file path
+        arduinoConnector = new ArduinoConnector("src/SerialPortDataSimulator/NormalConditions");
+        arduinoConnector.start();
+
         // Creating a VBox for the plant list
         VBox plantList = new VBox();
         plantList.setSpacing(5);
@@ -23,7 +43,6 @@ public class Main extends Application {
         Button addPlantButton = new Button("Add Plant");
         Button removePlantButton = new Button("Remove Plant");
 
-        // Adding functionality to the add and remove buttons
         addPlantButton.setOnAction(e -> addPlant(plantList));
         removePlantButton.setOnAction(e -> removePlant(plantList));
 
@@ -39,216 +58,263 @@ public class Main extends Application {
         root.setRight(buttonBox);
 
         // Creating the scene
-        Scene scene = new Scene(root, 400, 300);
+        Scene scene = new Scene(root, 800, 600);
 
         // Setting the scene to the stage
         primaryStage.setScene(scene);
-        primaryStage.setTitle("S.C.A.M");
+        primaryStage.setTitle("Plant Monitoring App");
         primaryStage.show();
     }
 
     // Method to add a new plant to the list
     private void addPlant(VBox plantList) {
-        // Creating a dialog for adding a new plant
-        Dialog<Plant> dialog = new Dialog<>();
-        dialog.setTitle("Add Plant");
-        dialog.setHeaderText("Add a new plant");
+        // Creating a VBox for plant details
+        VBox plantDetails = new VBox();
+        plantDetails.setSpacing(10);
+        plantDetails.setPadding(new Insets(10));
 
-        // Set the button types
-        ButtonType addButton = new ButtonType("Add", ButtonBar.ButtonData.OK_DONE);
-        dialog.getDialogPane().getButtonTypes().addAll(addButton, ButtonType.CANCEL);
-
-        // Create the labels and text fields for plant properties
+        // Creating input fields for plant information
         TextField nameField = new TextField();
-        TextField hydrationField = new TextField();
         TextField soilField = new TextField();
-        TextField humidityField = new TextField();
         TextField typeField = new TextField();
 
-        // Set the labels for the text fields
+        // Label for the input fields
         Label nameLabel = new Label("Name:");
-        Label hydrationLabel = new Label("Hydration %:");
         Label soilLabel = new Label("Soil:");
-        Label humidityLabel = new Label("Humidity %:");
-        Label typeLabel = new Label("Plant Type:");
+        Label typeLabel = new Label("Type:");
 
-        // Create a VBox to hold the labels and text fields
-        VBox dialogContent = new VBox(10);
-        dialogContent.getChildren().addAll(nameLabel, nameField, hydrationLabel, hydrationField,
-                soilLabel, soilField, humidityLabel, humidityField, typeLabel, typeField);
-        dialogContent.setPadding(new Insets(20));
+        // Adding input fields and labels to plant details VBox
+        plantDetails.getChildren().addAll(nameLabel, nameField, soilLabel, soilField, typeLabel, typeField);
 
-        dialog.getDialogPane().setContent(dialogContent);
+        // Creating a TitledPane to hold the plant information
+        TitledPane plantInfoPane = new TitledPane();
+        plantInfoPane.setContent(plantDetails);
 
-        // Convert the result to a plant object when the add button is clicked
-        dialog.setResultConverter(dialogButton -> {
-            if (dialogButton == addButton) {
-                try {
-                    double hydration = Double.parseDouble(hydrationField.getText());
-                    double humidity = Double.parseDouble(humidityField.getText());
-                    return new Plant(nameField.getText(), hydration, soilField.getText(), humidity, typeField.getText());
-                } catch (NumberFormatException e) {
-                    showErrorAlert("Please enter valid numeric values for hydration and humidity.");
-                    return null;
-                }
+        // Event listener to update TitledPane title when focus leaves the name field
+        nameField.focusedProperty().addListener((observable, oldValue, newValue) -> {
+            if (!newValue) { // Focus lost
+                plantInfoPane.setText(nameField.getText());
             }
-            return null;
         });
 
-        // Show the dialog and add the plant to the list if "Add" is clicked
-        dialog.showAndWait().ifPresent(plant -> {
-            Button plantButton = new Button(plant.getName());
-            plantButton.setOnAction(e -> editPlantProperties(plant));
-            plantList.getChildren().add(plantButton);
-        });
+        // Creating a BarChart to display hydration and humidity
+        CategoryAxis xAxis = new CategoryAxis();
+        NumberAxis yAxis = new NumberAxis(0, 100, 10); // Range from 0 to 100 with 10 unit intervals
+        BarChart<String, Number> chart = new BarChart<>(xAxis, yAxis);
+        chart.setTitle("Plant Monitoring");
+        chart.setLegendVisible(false);
+
+        // Create label for alert message
+        Label alertLabel = new Label();
+
+        // Adding the BarChart and the label for the alert message to the plant details VBox
+        plantDetails.getChildren().addAll(alertLabel, chart);
+
+        // Adding the TitledPane to the plant list
+        plantList.getChildren().add(plantInfoPane);
+
+        // Adding the plant details VBox to the list
+        plantDetailsList.add(plantDetails);
+
+        // Update chart data and monitor moisture periodically
+        updateChartData(chart, alertLabel);
+        monitorMoisture(nameField.getText(), alertLabel);
     }
 
-    // Method to remove the last plant from the list
+    // Method to remove a plant from the list
     private void removePlant(VBox plantList) {
-        // Removing the last plant from the list
-        if (!plantList.getChildren().isEmpty()) {
-            plantList.getChildren().remove(plantList.getChildren().size() - 1);
+        if (plantDetailsList.isEmpty()) {
+            return;
         }
+
+        // Create a combo box with checkboxes for selecting plants to remove
+        ComboBox<VBox> comboBox = new ComboBox<>();
+        comboBox.getItems().addAll(plantDetailsList);
+        comboBox.setCellFactory(param -> new CheckBoxListCell<>());
+
+        // Create an alert dialog for removing plants
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle("Remove Plant");
+        alert.setHeaderText("Select the plant you want to remove:");
+        alert.getDialogPane().setContent(comboBox);
+
+        // Add OK and Cancel buttons
+        ButtonType buttonTypeOk = new ButtonType("OK", ButtonBar.ButtonData.OK_DONE);
+        ButtonType buttonTypeCancel = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
+        alert.getButtonTypes().setAll(buttonTypeOk, buttonTypeCancel);
+
+        // Show dialog and wait for user response
+        alert.showAndWait().ifPresent(buttonType -> {
+            if (buttonType == buttonTypeOk) {
+                plantList.getChildren().remove(comboBox.getValue().getParent()); // Remove the plant details VBox from the plant list
+                plantDetailsList.remove(comboBox.getValue()); // Remove the plant details VBox from the list
+            }
+        });
     }
 
-    // Method to edit properties of a plant
-    private void editPlantProperties(Plant plant) {
-        // Creating a dialog for editing plant properties
-        Dialog<Plant> dialog = new Dialog<>();
-        dialog.setTitle("Edit Plant Properties");
-        dialog.setHeaderText("Editing properties of " + plant.getName());
+    // Method to update chart data periodically
+    private void updateChartData(BarChart<String, Number> chart, Label alertLabel) {
+        AnimationTimer timer = new AnimationTimer() {
+            private long lastUpdate = 0;
 
-        // Set the button types
-        ButtonType saveButton = new ButtonType("Save", ButtonBar.ButtonData.OK_DONE);
-        dialog.getDialogPane().getButtonTypes().addAll(saveButton, ButtonType.CANCEL);
-
-        // Create the labels and text fields for plant properties
-        TextField nameField = new TextField(plant.getName());
-        TextField hydrationField = new TextField(Double.toString(plant.getHydration()));
-        TextField soilField = new TextField(plant.getSoil());
-        TextField humidityField = new TextField(Double.toString(plant.getHumidity()));
-        TextField typeField = new TextField(plant.getType());
-
-        // Set the labels for the text fields
-        Label nameLabel = new Label("Name:");
-        Label hydrationLabel = new Label("Hydration:");
-        Label soilLabel = new Label("Soil:");
-        Label humidityLabel = new Label("Humidity:");
-        Label typeLabel = new Label("Plant Type:");
-
-        // Create a VBox to hold the labels and text fields
-        VBox dialogContent = new VBox(10);
-        dialogContent.getChildren().addAll(nameLabel, nameField, hydrationLabel, hydrationField,
-                soilLabel, soilField, humidityLabel, humidityField, typeLabel, typeField);
-        dialogContent.setPadding(new Insets(20));
-
-        dialog.getDialogPane().setContent(dialogContent);
-
-        // Convert the result to a plant object when the save button is clicked
-        dialog.setResultConverter(dialogButton -> {
-            if (dialogButton == saveButton) {
-                try {
-                    double hydration = Double.parseDouble(hydrationField.getText());
-                    double humidity = Double.parseDouble(humidityField.getText());
-                    return new Plant(nameField.getText(), hydration, soilField.getText(), humidity, typeField.getText());
-                } catch (NumberFormatException e) {
-                    showErrorAlert("Please enter valid numeric values for hydration and humidity.");
-                    return null;
+            @Override
+            public void handle(long now) {
+                if (now - lastUpdate >= 180_000_000_000L) { // 180,000,000,000 nanoseconds = 3 minutes
+                    double hydrationData = arduinoConnector.getHydrationData();
+                    double humidityData = arduinoConnector.getHumidityData();
+                    XYChart.Series<String, Number> series = new XYChart.Series<>();
+                    series.getData().add(new XYChart.Data<>("Hydration", hydrationData));
+                    series.getData().add(new XYChart.Data<>("Humidity", humidityData));
+                    chart.getData().setAll(series);
+                    lastUpdate = now;
                 }
             }
-            return null;
-        });
-
-        // Show the dialog and update the plant if "Save" is clicked
-        dialog.showAndWait().ifPresent(updatedPlant -> {
-            // Update the properties of the plant
-            plant.setName(updatedPlant.getName());
-            plant.setHydration(updatedPlant.getHydration());
-            plant.setSoil(updatedPlant.getSoil());
-            plant.setHumidity(updatedPlant.getHumidity());
-            plant.setType(updatedPlant.getType());
-        });
+        };
+        timer.start();
     }
 
-    // Method to show an error alert
-    private void showErrorAlert(String message) {
-        Alert alert = new Alert(Alert.AlertType.ERROR);
-        alert.setTitle("Error");
-        alert.setHeaderText(null);
-        alert.setContentText(message);
-        alert.showAndWait();
+    // Method to monitor moisture level of a plant and display text advice below the chart
+    private void monitorMoisture(String plantName, Label alertLabel) {
+        new Thread(() -> {
+            while (true) {
+                int currentMoistureLevel = arduinoConnector.getMoistureLevel(); // Assuming this method returns moisture level
+                if (currentMoistureLevel < MoistureAlertSystem.DRY_THRESHOLD) {
+                    showAlert(alertLabel, "Moisture level is too low for plant '" + plantName + "'. Please water it.");
+                } else if (currentMoistureLevel > MoistureAlertSystem.WET_THRESHOLD) {
+                    showAlert(alertLabel, "Moisture level is too high for plant '" + plantName + "'. Consider reducing watering.");
+                }
+                try {
+                    Thread.sleep(60000); // Check moisture level every minute
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }).start();
+    }
+
+    // Method to display alerts within the plant details
+    private void showAlert(Label alertLabel, String message) {
+        alertLabel.setText(message);
     }
 
     public static void main(String[] args) {
         launch(args);
     }
 
-    // Inner class representing a Plant with properties: name, hydration, soil, humidity, and type
-    private static class Plant {
-        private String name;
-        private double hydration;
-        private String soil;
-        private double humidity;
-        private String type;
+    // Inner class representing an Arduino connector
+    private static class ArduinoConnector {
+        private ArduinoConnectorSimulator simulator;
 
-        public Plant(String name, double hydration, String soil, double humidity, String type) {
-            this.name = name;
-            this.hydration = hydration;
-            this.soil = soil;
-            this.humidity = humidity;
-            this.type = type;
+        public ArduinoConnector(String filePath) {
+            simulator = new ArduinoConnectorSimulator(filePath);
         }
 
-        public String getName() {
-            return name;
+        public void start() {
+            simulator.start();
         }
 
-        public void setName(String name) {
-            this.name = name;
+        public void stop() {
+            simulator.stop();
         }
 
-        public double getHydration() {
-            return hydration;
+        // Methods to get hydration, humidity, and moisture level data
+        public double getHydrationData() {
+            // For now, return a random value for demonstration purposes
+            return Math.random() * 100;
         }
 
-        public void setHydration(double hydration) {
-            this.hydration = hydration;
+        public double getHumidityData() {
+            // For now, return a random value for demonstration purposes
+            return Math.random() * 100;
         }
 
-        public String getSoil() {
-            return soil;
+        public int getMoistureLevel() {
+            // For now, return a random value for demonstration purposes
+            return (int) (Math.random() * 100);
+        }
+    }
+
+    // Inner class representing an Arduino connector simulator
+    private static class ArduinoConnectorSimulator {
+        private String filePath;
+        private ScheduledExecutorService executor;
+        private final int INTERVAL = 1000; // Interval in milliseconds
+
+        public ArduinoConnectorSimulator(String filePath) {
+            this.filePath = filePath;
         }
 
-        public void setSoil(String soil) {
-            this.soil = soil;
+        public void start() {
+            try {
+                List<String> lines = Files.readAllLines(Paths.get(filePath));
+                executor = Executors.newSingleThreadScheduledExecutor();
+                final int[] counter = {0}; // Use an array to allow modification inside lambda
+
+                Runnable command = () -> {
+                    if (counter[0] < lines.size()) {
+                        String line = lines.get(counter[0]++);
+                        // Assuming the format is "HydrationValue, HumidityValue"
+                        String[] values = line.split(",");
+                        double hydrationValue = Double.parseDouble(values[0]);
+                        double humidityValue = Double.parseDouble(values[1]);
+                        // Update the hydration and humidity values
+                        updateValues(hydrationValue, humidityValue);
+                    } else {
+                        executor.shutdown(); // Shut down the executor once all lines are read
+                    }
+                };
+
+                // Schedule the command to run at fixed intervals
+                executor.scheduleAtFixedRate(command, 0, INTERVAL, TimeUnit.MILLISECONDS);
+
+            } catch (IOException e) {
+                System.out.println("Error reading file: " + e.getMessage());
+            }
         }
 
-        public double getHumidity() {
-            return humidity;
+        private void updateValues(double hydrationValue, double humidityValue) {
+            // Do something with the values, such as updating the UI
+            // For now, just print them
+            System.out.println("Hydration: " + hydrationValue + ", Humidity: " + humidityValue);
         }
 
-        public void setHumidity(double humidity) {
-            this.humidity = humidity;
+        public void stop() {
+            if (executor != null) {
+                executor.shutdownNow();
+            }
         }
+    }
 
-        public String getType() {
-            return type;
-        }
+    // Inner class representing the Moisture Alert System
+    private static class MoistureAlertSystem {
+        private static final int DRY_THRESHOLD = 20; // can be removed to set thresholds within database per plant.
+        private static final int WET_THRESHOLD = 80; // can be removed to set thresholds within database per plant.
+    }
 
-        public void setType(String type) {
-            this.type = type;
+    // Custom ListCell with a checkbox
+    private static class CheckBoxListCell<T> extends ListCell<T> {
+        private final CheckBox checkBox = new CheckBox();
+
+        public CheckBoxListCell() {
+            checkBox.setOnAction(e -> {
+                T item = getItem();
+                if (item != null) {
+                    checkBox.setSelected(!checkBox.isSelected());
+                }
+            });
         }
 
         @Override
-        public String toString() {
-            return "Plant{" +
-                    "name='" + name + '\'' +
-                    ", hydration=" + hydration +
-                    ", soil='" + soil + '\'' +
-                    ", humidity=" + humidity +
-                    ", type='" + type + '\'' +
-                    '}';
+        protected void updateItem(T item, boolean empty) {
+            super.updateItem(item, empty);
+            if (empty || item == null) {
+                setGraphic(null);
+            } else {
+                checkBox.setText(item.toString());
+                setGraphic(checkBox);
+            }
         }
     }
 }
+
 
